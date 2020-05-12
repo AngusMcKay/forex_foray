@@ -1,0 +1,7 @@
+*.ipynb
+*.pdf
+*igapi
+models*
+__pycache__*
+config*
+.idea*
