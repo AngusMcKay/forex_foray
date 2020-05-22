@@ -44,6 +44,7 @@ prices_df = ah.convert_prices(prices)
 prices_df.to_sql(name='gbpusd_spread_data', con=sql_engine, schema='forex', if_exists='append', index=False)
 
 
+
 '''
 create and check features
 '''

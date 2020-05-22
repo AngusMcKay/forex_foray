@@ -35,7 +35,11 @@ class GenerateHistoricFeatures:
         self.series.loc[self.series.index[lookback:], 'previous_price_'+str(lookback)+'_diff'] = (
                 current_price - previous_price)
 
-    def add_lowest_price_in_last_x_diff(self, price_col, lookback):
+    def add_lowest_price_in_last_x_diff(self, price_col, lookback, include_time_since_low=True):
+        """
+        Note: including time since low slows down function a lot, but is needed for calculating regression slope since
+        min
+        """
         self.series['lowest_last_'+str(lookback)] = None
         self.series['lowest_last_'+str(lookback)+'_diff'] = None
 
@@ -47,11 +51,16 @@ class GenerateHistoricFeatures:
                 - self.series['lowest_last_'+str(lookback)].iloc[lookback:]
         )
 
-        self.series.loc[self.series.index[lookback:], 'lowest_last_'+str(lookback)+'_timedelta'] = [
-            lookback - np.argmin(list(self.series[price_col])[r-lookback:r])
-            for r in range(lookback, len(self.series))]
+        if include_time_since_low:
+            self.series.loc[self.series.index[lookback:], 'lowest_last_'+str(lookback)+'_timedelta'] = [
+                lookback - np.argmin(list(self.series[price_col])[r-lookback:r])
+                for r in range(lookback, len(self.series))]
 
-    def add_highest_price_in_last_x_diff(self, price_col, lookback):
+    def add_highest_price_in_last_x_diff(self, price_col, lookback, include_time_since_high=True):
+        """
+        Note: including time since high slows down function a lot, but is needed for calculating regression slope since
+        max
+        """
         self.series['highest_last_'+str(lookback)] = None
         self.series['highest_last_'+str(lookback)+'_diff'] = None
 
@@ -63,9 +72,10 @@ class GenerateHistoricFeatures:
                 - self.series['highest_last_'+str(lookback)].iloc[lookback:]
         )
 
-        self.series.loc[self.series.index[lookback:], 'highest_last_' + str(lookback) + '_timedelta'] = [
-            lookback - np.argmax(list(self.series[price_col])[r-lookback:r])
-            for r in range(lookback, len(self.series))]
+        if include_time_since_high:
+            self.series.loc[self.series.index[lookback:], 'highest_last_' + str(lookback) + '_timedelta'] = [
+                lookback - np.argmax(list(self.series[price_col])[r-lookback:r])
+                for r in range(lookback, len(self.series))]
 
     def add_average_price_in_last_x_diff(self, price_col, lookback):
         self.series['average_last_'+str(lookback)] = None
@@ -98,28 +108,45 @@ class GenerateHistoricFeatures:
                 - self.series[name+'_last_'+str(lookback)].iloc[lookback:]
         )
 
+    def add_func_col_in_last_x(self, col, lookback, func, name, freq=1, include_current_row=True):
+        """
+        simpler version of above that doesn't add difference, intended for use with non-price based columns
+        """
+        include_current_row = include_current_row*1  # convert to 0 or 1
+
+        self.series[name+'_last_'+str(lookback)] = None
+
+        self.series.loc[self.series.index[lookback:], name+'_last_'+str(lookback)] = [
+            func(self.series[col].iloc[r-lookback:r+include_current_row:freq])
+            for r in range(lookback, len(self.series))]
+
     def add_spread(self, bid_price_col, ask_price_col):
         self.series['spread'] = np.maximum(self.series[ask_price_col] - self.series[bid_price_col], 0)
         self.series['spread_pc_ask'] = self.series['spread']/self.series[ask_price_col]
 
     def lin_reg_stats(self, x, y):
-        x = np.array(x)
-        y = np.array(y)
-        n = len(x)
-        if n == 1:
-            return (y[0], 0, y[0])
-        sum_xy = sum(x * y)
-        sum_x = sum(x)
-        sum_y = sum(y)
-        sum_x2 = sum(x**2)
+        try:
+            x = np.array(x)
+            y = np.array(y)
+            n = len(x)
+            if n == 1:
+                return (y[0], 0, y[0])
+            sum_xy = sum(x * y)
+            sum_x = sum(x)
+            sum_y = sum(y)
+            sum_x2 = sum(x**2)
 
-        incpt = (sum_y * sum_x2 - sum_x * sum_xy) / (n * sum_x2 - sum_x**2)
+            incpt = (sum_y * sum_x2 - sum_x * sum_xy) / (n * sum_x2 - sum_x**2)
 
-        slope = (n * sum_xy - sum_x * sum_y) / (n * sum_x2 - sum_x**2)
+            slope = (n * sum_xy - sum_x * sum_y) / (n * sum_x2 - sum_x**2)
 
-        pred1 = incpt + slope * (n+1)
+            pred1 = incpt + slope * (n+1)
 
-        return (incpt, slope, pred1)
+            return (incpt, slope, pred1)
+
+        except TypeError:
+            print('warning: unable to calculate regression for row, returning np.nans')
+            return (np.nan, np.nan, np.nan)
 
     def regression_slope_last_x(self, price_col, lookback):
         x = range(lookback)
@@ -133,6 +160,19 @@ class GenerateHistoricFeatures:
         self.series.loc[self.series.index[lookback:], 'reg_predt_last_' + str(lookback)] = reg_stats[:, 2]
         self.series.loc[self.series.index[lookback:], 'reg_predt_last_' + str(lookback)+'_diff'] = (
             reg_stats[:, 2] - self.series[price_col].iloc[lookback:].values)
+
+    def regression_slope_last_x_nameable(self, col, lookback, name):
+        x = range(lookback)
+
+        reg_stats = np.array([
+            self.lin_reg_stats(x, self.series[col].iloc[r-lookback:r]) for r in range(lookback, len(self.series))]
+        )
+
+        self.series.loc[self.series.index[lookback:], name+'_reg_incpt_last_' + str(lookback)] = reg_stats[:, 0]
+        self.series.loc[self.series.index[lookback:], name+'_reg_slope_last_' + str(lookback)] = reg_stats[:, 1]
+        self.series.loc[self.series.index[lookback:], name+'_reg_predt_last_' + str(lookback)] = reg_stats[:, 2]
+        self.series.loc[self.series.index[lookback:], name+'_reg_predt_last_' + str(lookback)+'_diff'] = (
+            reg_stats[:, 2] - self.series[col].iloc[lookback:].values)
 
     def regression_slope_since_min_last_x(self, price_col, lookback):
         if 'lowest_last_'+str(lookback)+'_timedelta' not in self.series.columns:
@@ -194,7 +234,6 @@ class GenerateHistoricFeatures:
             self.series['quant_reg_'+str(name)+'_last_'+str(lookback)+'_upper']
             - self.series['quant_reg_'+str(name)+'_last_'+str(lookback)+'_lower']
         )
-
 
     def rise(self, price_col):
         self.series['rise'] = None
@@ -467,49 +506,71 @@ class GenerateHistoricFeatures:
     add outcomes
     '''
 
-    def add_future_price_diff(self, price_col, lookforward):
-        self.series['future_price_' + str(lookforward)] = None
-        self.series['future_price_' + str(lookforward) + '_diff'] = None
+    def add_future_price_diff(self, start_price_col, end_price_col, lookforward, name):
+        self.series[name+'_future_price_' + str(lookforward)] = None
+        self.series[name+'_future_price_' + str(lookforward) + '_diff'] = None
 
-        current_price = self.series.loc[self.series.index[:-lookforward], price_col].values
-        future_price = self.series.loc[self.series.index[lookforward:], price_col].values
+        current_price = self.series.loc[self.series.index[:-lookforward], start_price_col].values
+        future_price = self.series.loc[self.series.index[lookforward:], end_price_col].values
 
-        self.series.loc[self.series.index[:-lookforward], 'future_price_' + str(lookforward)] = future_price
+        self.series.loc[self.series.index[:-lookforward], name+'_future_price_' + str(lookforward)] = future_price
 
-        self.series.loc[self.series.index[:-lookforward], 'future_price_' + str(lookforward) + '_diff'] = (
+        self.series.loc[self.series.index[:-lookforward], name+'_future_price_' + str(lookforward) + '_diff'] = (
                 future_price - current_price)
 
-    def add_lowest_price_in_next_x_diff(self, price_col, lookforward):
+    def add_lowest_price_in_next_x_diff(self, start_price_col, end_price_high_col, end_price_low_col, lookforward):
         self.series['lowest_next_'+str(lookforward)] = None
         self.series['lowest_next_'+str(lookforward)+'_diff'] = None
 
         self.series.loc[self.series.index[:-lookforward], 'lowest_next_'+str(lookforward)] = [
-            min(self.series[price_col].iloc[r+1:r+lookforward+1]) for r in range(len(self.series)-lookforward)]
+            min(self.series[end_price_low_col].iloc[r+1:r+lookforward+1]) for r in range(len(self.series)-lookforward)]
 
         self.series.loc[self.series.index[:-lookforward], 'lowest_next_'+str(lookforward)+'_diff'] = (
                 self.series['lowest_next_'+str(lookforward)].iloc[:-lookforward]
-                - self.series[price_col].iloc[:-lookforward]
+                - self.series[start_price_col].iloc[:-lookforward]
         )
 
         self.series.loc[self.series.index[:-lookforward], 'lowest_next_'+str(lookforward)+'_timedelta'] = [
-            np.argmin(list(self.series[price_col])[r+1:r+lookforward+1]) + 1
+            np.argmin(list(self.series[end_price_low_col])[r+1:r+lookforward+1]) + 1
             for r in range(len(self.series)-lookforward)]
 
-    def add_highest_price_in_next_x_diff(self, price_col, lookforward):
+        # note: prev high calc assumes that if in same period as low point then high occurs before the low
+        self.series.loc[self.series.index[:-lookforward], 'lowest_next_' + str(lookforward) + '_prev_high'] = [
+            max(self.series[end_price_high_col][
+                r+1:r+int(self.series['lowest_next_'+str(lookforward)+'_timedelta'].iloc[r])+1])
+            for r in range(len(self.series) - lookforward)]
+
+        self.series.loc[self.series.index[:-lookforward], 'lowest_next_' + str(lookforward) + '_prev_high_diff'] = (
+                self.series['lowest_next_' + str(lookforward) + '_prev_high'].iloc[:-lookforward]
+                - self.series[start_price_col].iloc[:-lookforward]
+        )
+
+    def add_highest_price_in_next_x_diff(self, start_price_col, end_price_high_col, end_price_low_col, lookforward):
         self.series['highest_next_'+str(lookforward)] = None
         self.series['highest_next_'+str(lookforward)+'_diff'] = None
 
         self.series.loc[self.series.index[:-lookforward], 'highest_next_'+str(lookforward)] = [
-            max(self.series[price_col].iloc[r+1:r+lookforward+1]) for r in range(len(self.series)-lookforward)]
+            max(self.series[end_price_high_col].iloc[r+1:r+lookforward+1]) for r in range(len(self.series)-lookforward)]
 
         self.series.loc[self.series.index[:-lookforward], 'highest_next_'+str(lookforward)+'_diff'] = (
                 self.series['highest_next_'+str(lookforward)].iloc[:-lookforward]
-                - self.series[price_col].iloc[:-lookforward]
+                - self.series[start_price_col].iloc[:-lookforward]
         )
 
         self.series.loc[self.series.index[:-lookforward], 'highest_next_' + str(lookforward) + '_timedelta'] = [
-            np.argmax(list(self.series[price_col])[r+1:r+lookforward+1]) + 1
+            np.argmax(list(self.series[end_price_high_col])[r+1:r+lookforward+1]) + 1
             for r in range(len(self.series)-lookforward)]
+
+        # note: prev low calc assumes that if in same period as high point then low occurs before the high
+        self.series.loc[self.series.index[:-lookforward], 'highest_next_' + str(lookforward) + '_prev_low'] = [
+            min(self.series[end_price_low_col][
+                r+1:r+int(self.series['highest_next_'+str(lookforward)+'_timedelta'].iloc[r])+1])
+            for r in range(len(self.series) - lookforward)]
+
+        self.series.loc[self.series.index[:-lookforward], 'highest_next_' + str(lookforward) + '_prev_low_diff'] = (
+                self.series['highest_next_' + str(lookforward) + '_prev_low'].iloc[:-lookforward]
+                - self.series[start_price_col].iloc[:-lookforward]
+        )
 
     def add_func_price_in_next_x_diff(self, price_col, lookforward, func, name, freq=1):
         """
@@ -623,6 +684,96 @@ class GenerateHistoricFeatures:
                 self.series[end_price_high_col].iloc[r + 1:r + lookforward + 1],
                 self.series[start_price_col].iloc[r],
                 self.series[end_price_close_col].iloc[r + lookforward]
+            )
+            for r in range(len(self.series) - lookforward)]
+
+        self.series.loc[self.series.index[:-lookforward],
+                        long_or_short + '_' + name + '_next_' + str(lookforward) + '_end_price_diff'] = (
+            self.series[long_or_short + '_' + name + '_next_' + str(lookforward) + '_end_price'].iloc[:-lookforward]
+            - self.series[start_price_col].iloc[:-lookforward]
+        )
+
+        if long_or_short == 'long':
+            self.series.loc[self.series.index[:-lookforward],
+                            long_or_short+'_'+name+'_next_'+str(lookforward)+'_profit'] = (
+                self.series[long_or_short+'_'+name+'_next_'+str(lookforward)+'_end_price_diff'].iloc[:-lookforward])
+        elif long_or_short == 'short':
+            self.series.loc[self.series.index[:-lookforward],
+                            long_or_short+'_'+name+'_next_'+str(lookforward)+'_profit'] = (
+                - self.series[long_or_short+'_'+name+'_next_'+str(lookforward)+'_end_price_diff'].iloc[:-lookforward])
+
+    def stoploss_limit_outcome_variable_limits(
+            self, start_price_col, end_price_high_col, end_price_low_col, end_price_close_col,
+            lookforward, high_limit_col, low_limit_col, long_or_short, name):
+        """
+        start price should be ask for long position, bid for short position
+        end prices should be bid for long position, ask for short position
+        if breach high and low limits in same period then assumes worst case scenario
+        high_limit and low_limit expressed as difference between current price
+        """
+
+        def first_breach_low(low_prices, start_price, low_limit):
+            breaches = [i + 1 for i, p in enumerate(low_prices) if p <= start_price + low_limit]
+            if len(breaches) == 0:
+                return False
+            return breaches[0]
+
+        def first_breach_high(high_prices, start_price, high_limit):
+            breaches = [i + 1 for i, p in enumerate(high_prices) if p >= start_price + high_limit]
+            if len(breaches) == 0:
+                return False
+            return breaches[0]
+
+        def calculate_return(low_prices, high_prices, start_price, no_breach_end_price,
+                             low_limit_price, high_limit_price):
+            try:
+                low_limit = low_limit_price - start_price
+            except TypeError:
+                return np.nan
+
+            try:
+                high_limit = high_limit_price - start_price
+            except TypeError:
+                return np.nan
+
+            if (low_limit >= 0) or (high_limit <= 0):
+                return start_price
+
+            low_breach = first_breach_low(low_prices, start_price, low_limit)
+            high_breach = first_breach_high(high_prices, start_price, high_limit)
+
+            if not low_breach and not high_breach:
+                return no_breach_end_price
+
+            if long_or_short == 'long':
+                if not low_breach:
+                    return start_price + high_limit
+                elif not high_breach:
+                    return start_price + low_limit
+                elif low_breach <= high_breach:
+                    return start_price + low_limit
+                elif high_breach < low_breach:
+                    return start_price + high_limit
+
+            if long_or_short == 'short':
+                if not high_breach:
+                    return start_price + low_limit
+                elif not low_breach:
+                    return start_price + high_limit
+                elif high_breach <= low_breach:
+                    return start_price + high_limit
+                elif low_breach < high_breach:
+                    return start_price + low_limit
+
+        self.series.loc[self.series.index[:-lookforward],
+                        long_or_short + '_' + name + '_next_' + str(lookforward)+'_end_price'] = [
+            calculate_return(
+                self.series[end_price_low_col].iloc[r + 1:r + lookforward + 1],
+                self.series[end_price_high_col].iloc[r + 1:r + lookforward + 1],
+                self.series[start_price_col].iloc[r],
+                self.series[end_price_close_col].iloc[r + lookforward],
+                self.series[low_limit_col].iloc[r],
+                self.series[high_limit_col].iloc[r]
             )
             for r in range(len(self.series) - lookforward)]
 

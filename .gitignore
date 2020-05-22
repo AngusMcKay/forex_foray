@@ -5,3 +5,5 @@ models*
 __pycache__*
 config*
 .idea*
+*.csv
+data/*

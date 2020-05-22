@@ -28,7 +28,7 @@ class GenerateFeatures:
         self.series.at[self.series.index[-1], 'previous_price_'+str(lookback)+'_diff'] = (
                 current_price - previous_price)
 
-    def add_lowest_price_in_last_x_diff(self, price_col, lookback):
+    def add_lowest_price_in_last_x_diff(self, price_col, lookback, include_time_since_low=True):
         self.series.at[self.series.index[-1], 'lowest_last_'+str(lookback)] = min(
             self.series[price_col].iloc[-(1+lookback):-1])
 
@@ -37,10 +37,11 @@ class GenerateFeatures:
                 - self.series['lowest_last_'+str(lookback)].iloc[-1]
         )
 
-        self.series.at[self.series.index[-1], 'lowest_last_'+str(lookback)+'_timedelta'] = (
-            lookback - np.argmin(list(self.series[price_col])[-(1+lookback):-1]))
+        if include_time_since_low:
+            self.series.at[self.series.index[-1], 'lowest_last_'+str(lookback)+'_timedelta'] = (
+                    lookback - np.argmin(list(self.series[price_col])[-(1+lookback):-1]))
 
-    def add_highest_price_in_last_x_diff(self, price_col, lookback):
+    def add_highest_price_in_last_x_diff(self, price_col, lookback, include_time_since_high=True):
         self.series.at[self.series.index[-1], 'highest_last_'+str(lookback)] = max(
             self.series[price_col].iloc[-(1+lookback):-1])
 
@@ -49,8 +50,9 @@ class GenerateFeatures:
                 - self.series['highest_last_'+str(lookback)].iloc[-1]
         )
 
-        self.series.at[self.series.index[-1], 'highest_last_' + str(lookback) + '_timedelta'] = (
-            lookback - np.argmax(list(self.series[price_col])[-(1+lookback):-1]))
+        if include_time_since_high:
+            self.series.at[self.series.index[-1], 'highest_last_' + str(lookback) + '_timedelta'] = (
+                    lookback - np.argmax(list(self.series[price_col])[-(1+lookback):-1]))
 
     def add_average_price_in_last_x_diff(self, price_col, lookback):
         self.series.at[self.series.index[-1], 'average_last_'+str(lookback)] = np.mean(
@@ -76,6 +78,16 @@ class GenerateFeatures:
                 self.series[price_col].iloc[-1]
                 - self.series[name+'_last_'+str(lookback)].iloc[-1]
         )
+
+    def add_func_col_in_last_x(self, col, lookback, func, name, freq=1, include_current_row=True):
+        """
+        simpler version of above that doesn't add difference, intended for use with non-price based columns
+        """
+        include_current_row = include_current_row * 1  # convert to 0 or 1
+        slice_end_point = len(self.series) - (1 - include_current_row)
+
+        self.series.at[self.series.index[-1], name + '_last_' + str(lookback)] = func(
+            self.series[col].iloc[-(1+lookback):slice_end_point:freq])
 
     def add_spread(self, bid_price_col, ask_price_col):
         self.series.at[self.series.index[-1], 'spread'] = max(
@@ -111,6 +123,17 @@ class GenerateFeatures:
         self.series.at[self.series.index[-1], 'reg_slope_last_' + str(lookback)] = reg_stats[1]
         self.series.at[self.series.index[-1], 'reg_predt_last_' + str(lookback)] = reg_stats[2]
         self.series.at[self.series.index[-1], 'reg_predt_last_' + str(lookback)+'_diff'] = (
+            reg_stats[2] - self.series[price_col].iloc[-1])
+
+    def regression_slope_last_x_nameable(self, price_col, lookback, name):
+        x = range(lookback)
+
+        reg_stats = self.lin_reg_stats(x, self.series[price_col].iloc[-(1+lookback):-1])
+
+        self.series.at[self.series.index[-1], name+'_reg_incpt_last_' + str(lookback)] = reg_stats[0]
+        self.series.at[self.series.index[-1], name+'_reg_slope_last_' + str(lookback)] = reg_stats[1]
+        self.series.at[self.series.index[-1], name+'_reg_predt_last_' + str(lookback)] = reg_stats[2]
+        self.series.at[self.series.index[-1], name+'_reg_predt_last_' + str(lookback)+'_diff'] = (
             reg_stats[2] - self.series[price_col].iloc[-1])
 
     def regression_slope_since_min_last_x(self, price_col, lookback):
